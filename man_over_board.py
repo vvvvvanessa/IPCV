@@ -2,9 +2,7 @@ import cv2
 import numpy as np
 import math
 from calib import calib_videos
-
-# Getting the intrinsic coefficients of the camera with checkerboard.
-camera_matrix, dist_coeffs = calib_videos()
+from detection import *
 
 def extend_line_to_left_right_edges(x1, y1, x2, y2, width):
     """
@@ -79,8 +77,51 @@ def correct_image_perspective(image, pitch, tilt, camera_matrix):
 
     return corrected_image
 
+def calculate_distance_to_target(x, y, camera_matrix, camera_height=2.5):
+    """
+    Return the real distance of the object based on its location in the image.
+    """
+    fx = camera_matrix[0, 0]
+    fy = camera_matrix[1, 1]
+    cx = camera_matrix[0, 2]
+    cy = camera_matrix[1, 2]
+    x_offset = x - cx
+    y_offset = y - cy
+
+    if y_offset <= 0:
+        print("The object is above the horizon, distance undetectable!")
+        return 0
+
+    z = camera_height * fy / y_offset
+    x = (x_offset / fx) * z
+    distance = np.sqrt(x**2 + z**2)
+    
+    return distance
+
+def display_object_information(frame, loc_x, loc_y, success, camera_matrix):
+    """
+    Render the buoy information for the frame.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    font_thickness = 2
+    text_color = (0, 255, 255)
+    loc_point = (int(loc_x), int(loc_y))
+    distance = calculate_distance_to_target(loc_x, loc_y, camera_matrix)
+    if success:
+        cv2.circle(frame, loc_point, 8, (0, 0, 255), 2)
+        subtitle = f"Bouy distance: {round(distance, 1)} meters."
+    else:
+        text_color = (0, 0, 255)
+        subtitle = f"Bouy distance: {round(distance, 1)} meters (target lost)."
+    cv2.putText(frame, subtitle, (10, 30), font, font_scale, text_color, font_thickness, cv2.LINE_AA)
+    return frame
 
 def process_video(input_video, output_video, camera_matrix, dist_coeffs):
+    """
+    First, use the intrinsic matrix to calibrate the video.
+    Second, rectify the video based on horizon information.
+    """
     cap = cv2.VideoCapture(input_video)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -93,10 +134,9 @@ def process_video(input_video, output_video, camera_matrix, dist_coeffs):
         ret, frame = cap.read()
         if not ret:
             break
-        
         frame_count += 1
-        # if frame_count % fps == 0:
-        #     print(f"Time: {frame_count // fps}s")
+        if frame_count % fps == 0:
+            print(f"Calibration and stablization progress: {frame_count // fps}s")
         
         undistorted_frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
         horizon_line, tilt_angle, horizon_frame = detect_horizon(undistorted_frame)
@@ -120,8 +160,49 @@ def process_video(input_video, output_video, camera_matrix, dist_coeffs):
     out.release()
     cv2.destroyAllWindows()
 
+def detect_buoy(input_video, output_video, camera_matrix, start_x=659, start_y=587):
+    """
+    Use optical flow to estimate the location of the buoy.
+    """
+    cap = cv2.VideoCapture(input_video)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    out = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
+    
+    _, prev_frame = cap.read()
+    ROI_x, ROI_y = start_x, start_y
+    
+    frame_count = 0
+    while cap.isOpened():
+        ret, curr_frame = cap.read()
+        if not ret:
+            break
+        frame_count += 1
+        if frame_count % fps == 0:
+            print(f"Detection progress: {frame_count // fps}s")
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        
+        loc_x, loc_y, success = detect_object_in_ROI(prev_frame, curr_frame, ROI_x, ROI_y)
+        prev_frame = curr_frame.copy()
+        ROI_x, ROI_y = loc_x, loc_y
+        output_frame = display_object_information(curr_frame, loc_x, loc_y, success, camera_matrix)
+        cv2.imshow('Object detection:', output_frame)
+        out.write(output_frame)
+            
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     input_video_path = 'MAH01462.MP4'
-    output_video_path = 'output_video_stablized.mp4'
-    process_video(input_video_path, output_video_path, camera_matrix, dist_coeffs)
+    stable_video_path = 'output_video_stablized.mp4'
+    output_video_path = 'distance_estimation.mp4'
+    # Getting the intrinsic coefficients of the camera with checkerboard.
+    camera_matrix, dist_coeffs = calib_videos()
+    # Calibration and stablization of the video.
+    process_video(input_video_path, stable_video_path, camera_matrix, dist_coeffs)
+    # Detect the buoy and estimate the distance, then generate the output video.
+    detect_buoy(stable_video_path, output_video_path, camera_matrix)
