@@ -19,7 +19,7 @@ def detect_object_in_ROI(prev_frame, next_frame, center_x, center_y, ROI_width=3
     next_gray = cv2.cvtColor(next_roi, cv2.COLOR_BGR2GRAY)
     
     # Canny edge detection
-    edges = cv2.Canny(next_gray, 175, 200)
+    edges = cv2.Canny(next_gray, 180, 200)
     # cv2.imshow("edges", edges)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     loc_x, loc_y = center_x, center_y
